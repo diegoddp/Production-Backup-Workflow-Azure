@@ -72,8 +72,8 @@ stages:
                 echo "Initializing a new Git repository..."
                 cd artifact/
                 git init .
-                git config --global user.email "myemail@email.com"
-                git config --global user.name "myuser"
+                git config --global user.email "your.email@example.com"
+                git config --global user.name "your-username"
                 git add *
                 git commit -m "backup $(date)"
 
@@ -81,5 +81,5 @@ stages:
                 git config --global init.defaultBranch main
                 git branch remediations_dump
                 git checkout -f remediations_dump
-                git remote add origin https://kerry-web-ops:$(GithubPAT)@github.com/organisationname/$(ResourceGroupName).git
+                git remote add origin https://your-bot-user:$(GithubPAT)@github.com/your-org/your-repo.git
                 git push origin -f remediations_dump
