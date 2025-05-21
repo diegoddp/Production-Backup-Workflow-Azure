@@ -1,0 +1,85 @@
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+- group: 'Environment Variables'
+
+stages:
+  - stage: TriggerBackup
+    jobs:
+      - job: BackupJob
+        steps:
+          - task: AzureCLI@2
+            inputs:
+              azureSubscription: '$(azureSubsc)'  # Azure Service Connection (uses Entra ID auth)
+              scriptType: 'bash'
+              scriptLocation: 'inlineScript'
+              inlineScript: |
+                echo "Getting subscription ID..."
+                subscriptionId=$(az account show --query id -o tsv)
+
+                echo "Resource Group: $(ResourceGroupName)"
+                echo "App Service Name: $(appservice_name)"
+                echo "Slot Name: $(slots_prd_name)"
+
+                # Define Kudu ZIP API URL for the wwwroot folder
+                kuduZipUrl="https://$(appservice_name)-$(slots_prd_name).scm.azurewebsites.net/api/zip/site/wwwroot"
+
+                # Create a unique backup filename
+                timestamp=$(date +%Y%m%d%H%M%S)
+                backupZip="wwwroot-backup-$timestamp.zip"
+
+                echo "Downloading ZIP backup from Kudu..."
+                echo "curl -L --user '$(KuduUser):$(KuduPassword)' \"$kuduZipUrl\" -o \"$backupZip\" --verbose"
+                curl -L --user "$(KuduUser):$(KuduPassword)" "$kuduZipUrl" -o "$backupZip" --verbose
+                if [ $? -ne 0 ]; then
+                  echo "Failed to download wwwroot ZIP backup from Kudu API"
+                  exit 1
+                fi
+
+                echo "Download complete: $backupZip"
+                echo "File size: $(stat -c%s \"$backupZip\") bytes"
+
+                # Create MySQL database backup
+                echo "Creating MySQL database backup..."
+                mysqldump --host=$(sqlhost).mysql.database.azure.com --user=$(administratorLogin) --password=$(administratorLoginPassword) --ssl-mode=REQUIRED $(databases_mysql_name_prd) > dbdump.sql
+                if [ $? -ne 0 ]; then
+                  echo "Failed to create MySQL database backup"
+                  exit 1
+                fi
+
+                # Zip the database dump
+                echo "Zipping the database dump..."
+                zip dumped_db.zip dbdump.sql
+                if [ $? -ne 0 ]; then
+                  echo "Failed to zip the database dump"
+                  exit 1
+                fi
+
+                # Prepare files for GitHub
+                echo "Preparing files for GitHub..."
+                mkdir -p artifact/wordpress
+                mkdir -p artifact/db
+                chmod -R 755 artifact/
+                unzip "$backupZip" -d artifact/wordpress
+                cp dumped_db.zip artifact/db
+                ls -la
+                
+                chmod -R 755 artifact/
+                # Initialize a new Git repository
+                echo "Initializing a new Git repository..."
+                cd artifact/
+                git init .
+                git config --global user.email "myemail@email.com"
+                git config --global user.name "myuser"
+                git add *
+                git commit -m "backup $(date)"
+
+                echo "Pushing to GitHub repository..."
+                git config --global init.defaultBranch main
+                git branch remediations_dump
+                git checkout -f remediations_dump
+                git remote add origin https://kerry-web-ops:$(GithubPAT)@github.com/organisationname/$(ResourceGroupName).git
+                git push origin -f remediations_dump
